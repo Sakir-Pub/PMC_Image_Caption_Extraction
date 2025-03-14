@@ -71,8 +71,19 @@ class PMCImageTextExtractor:
             print(f"Error counting articles: {count_response.status_code}")
             return []
         
-        total_articles = int(count_response.text.strip())
-        print(f"Total articles found matching the query: {total_articles}")
+         # Parse the XML response to extract the count
+        try:
+            xml_root = ET.fromstring(count_response.text)
+            count_element = xml_root.find('.//Count')
+            if count_element is not None:
+                total_articles = int(count_element.text)
+                print(f"Total articles found matching the query: {total_articles}")
+            else:
+                print("Could not find count in response")
+                total_articles = 0
+        except Exception as e:
+            print(f"Error parsing count response: {str(e)}")
+            total_articles = 0
         
         # If not limiting results, set max_results to total_articles
         if not limit_results:
