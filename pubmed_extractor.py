@@ -369,7 +369,7 @@ if __name__ == "__main__":
     extractor = PMCImageTextExtractor(
         output_dir="pmc_glaucoma",
         email="anabil@charlotte.edu",  # Replace with your email
-        api_key="c723f4433947bd8c33ac66bcb5e5c58c4608"
+        api_key=""
     )
     
     # Create the dataset
