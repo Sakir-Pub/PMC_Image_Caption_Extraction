@@ -36,13 +36,14 @@ class PMCImageTextExtractor:
         # Initialize metadata
         self.metadata = {"pairs": []}
         
-    def search_articles(self, query, max_results=100):
+    def search_articles(self, query, limit_results=True, max_results=100):
         """
         Search for PMC articles based on a query.
         
         Args:
             query: Search query (e.g., "cancer immunotherapy")
-            max_results: Maximum number of results to return
+            limit_results: Whether to limit the number of results
+            max_results: Maximum number of results to return if limit_results is True
             
         Returns:
             List of PMC IDs
@@ -51,6 +52,36 @@ class PMCImageTextExtractor:
         base_url = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
         # Add "open access"[filter] to limit to open access articles
         full_query = f"{query} AND open access[filter]"
+        
+        # First get the total count
+        count_params = {
+            "db": "pmc",
+            "term": full_query,
+            "rettype": "count",
+            "tool": "ImageTextPairExtractor",
+            "email": self.email
+        }
+        
+        if self.api_key:
+            count_params["api_key"] = self.api_key
+        
+        # Get the total count first
+        count_response = requests.get(base_url, params=count_params)
+        if count_response.status_code != 200:
+            print(f"Error counting articles: {count_response.status_code}")
+            return []
+        
+        total_articles = int(count_response.text.strip())
+        print(f"Total articles found matching the query: {total_articles}")
+        
+        # If not limiting results, set max_results to total_articles
+        if not limit_results:
+            max_results = total_articles
+            print(f"No limit applied - will attempt to process all {total_articles} articles")
+        else:
+            print(f"Limiting results to {max_results} articles")
+        
+        # Now get the actual results
         params = {
             "db": "pmc",
             "term": full_query,
@@ -146,6 +177,11 @@ class PMCImageTextExtractor:
                     # Get all text content in the caption
                     caption_text = "".join(caption_element.itertext()).strip()
                     figure_data["caption"] = caption_text
+                    
+                    # Check if caption contains relevant keywords: fundus, oct, or octa
+                    if not (re.search(r'fundus|oct|octa', caption_text, re.IGNORECASE)):
+                        # Skip figures without relevant keywords in caption
+                        continue
                 else:
                     # Skip figures without captions
                     continue
@@ -273,25 +309,26 @@ class PMCImageTextExtractor:
                 
         return pairs_count
     
-    def create_dataset(self, query, max_articles=10):
+    def create_dataset(self, query, limit_articles=True, max_articles=10):
         """
         Create a dataset of figure-caption pairs from PMC articles.
         
         Args:
             query: Search query for relevant articles
-            max_articles: Maximum number of articles to process
+            limit_articles: Whether to limit the number of articles to process
+            max_articles: Maximum number of articles to process if limit_articles is True
             
         Returns:
             Path to the dataset directory
         """
         print(f"Searching for articles with query: '{query}'")
-        pmc_ids = self.search_articles(query, max_results=max_articles)
+        pmc_ids = self.search_articles(query, limit_results=limit_articles, max_results=max_articles)
         
         if not pmc_ids:
             print("No articles found.")
             return self.output_dir
             
-        print(f"Found {len(pmc_ids)} articles. Starting processing...")
+        print(f"Will process {len(pmc_ids)} articles. Starting processing...")
         
         total_pairs = 0
         with ThreadPoolExecutor(max_workers=5) as executor:
@@ -319,13 +356,15 @@ class PMCImageTextExtractor:
 if __name__ == "__main__":
     # Initialize the extractor
     extractor = PMCImageTextExtractor(
-        output_dir="pmc_cancer_dataset",
+        output_dir="pmc_glaucoma",
         email="anabil@charlotte.edu",  # Replace with your email
         api_key="c723f4433947bd8c33ac66bcb5e5c58c4608"
     )
     
     # Create the dataset
+    # Set limit_articles=False to process all available articles
     extractor.create_dataset(
-        query="cancer immunotherapy",  # Your topic of interest
-        max_articles=100  # Number of articles to process
+        query="glaucoma",  # Your topic of interest
+        limit_articles=False,  # Set to False to process all available articles
+        max_articles=100  # Only used if limit_articles is True
     )
