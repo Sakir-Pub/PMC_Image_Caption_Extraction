@@ -38,7 +38,7 @@ class PMCImageTextExtractor:
         
     def search_articles(self, query, limit_results=True, max_results=100):
         """
-        Search for PMC articles based on a query.
+        Search for PMC articles based on a query with improved error handling.
         
         Args:
             query: Search query (e.g., "cancer immunotherapy")
@@ -65,25 +65,49 @@ class PMCImageTextExtractor:
         if self.api_key:
             count_params["api_key"] = self.api_key
         
-        # Get the total count first
-        count_response = requests.get(base_url, params=count_params)
-        if count_response.status_code != 200:
-            print(f"Error counting articles: {count_response.status_code}")
-            return []
+        # Get the total count with retry logic
+        max_retries = 3
+        retry_count = 0
+        total_articles = 0
         
-         # Parse the XML response to extract the count
-        try:
-            xml_root = ET.fromstring(count_response.text)
-            count_element = xml_root.find('.//Count')
-            if count_element is not None:
-                total_articles = int(count_element.text)
-                print(f"Total articles found matching the query: {total_articles}")
-            else:
-                print("Could not find count in response")
-                total_articles = 0
-        except Exception as e:
-            print(f"Error parsing count response: {str(e)}")
-            total_articles = 0
+        while retry_count < max_retries:
+            try:
+                count_response = requests.get(base_url, params=count_params, timeout=30)
+                
+                if count_response.status_code != 200:
+                    print(f"Error counting articles: {count_response.status_code}")
+                    retry_count += 1
+                    wait_time = 2 ** retry_count
+                    print(f"Retrying count request {retry_count}/{max_retries} after {wait_time} seconds")
+                    time.sleep(wait_time)
+                    continue
+                
+                # Parse the XML response to extract the count
+                try:
+                    xml_root = ET.fromstring(count_response.text)
+                    count_element = xml_root.find('.//Count')
+                    if count_element is not None:
+                        total_articles = int(count_element.text)
+                        print(f"Total articles found matching the query: {total_articles}")
+                        break
+                    else:
+                        print("Could not find count in response")
+                        total_articles = 0
+                        break
+                except Exception as e:
+                    print(f"Error parsing count response: {str(e)}")
+                    total_articles = 0
+                    break
+                    
+            except requests.exceptions.Timeout:
+                retry_count += 1
+                wait_time = 2 ** retry_count
+                print(f"Timeout when counting articles. Retry {retry_count}/{max_retries} after {wait_time} seconds")
+                time.sleep(wait_time)
+                
+            except requests.exceptions.RequestException as e:
+                print(f"Error when counting articles: {str(e)}")
+                return []
         
         # If not limiting results, set max_results to total_articles
         if not limit_results:
@@ -105,20 +129,42 @@ class PMCImageTextExtractor:
         if self.api_key:
             params["api_key"] = self.api_key
             
-        # Make the request
-        response = requests.get(base_url, params=params)
+        # Make the request with retry logic
+        retry_count = 0
         
-        if response.status_code != 200:
-            print(f"Error searching articles: {response.status_code}")
-            return []
-            
-        # Extract PMC IDs
-        data = response.json()
-        return data["esearchresult"]["idlist"]
+        while retry_count < max_retries:
+            try:
+                response = requests.get(base_url, params=params, timeout=30)
+                
+                if response.status_code != 200:
+                    print(f"Error searching articles: {response.status_code}")
+                    retry_count += 1
+                    wait_time = 2 ** retry_count
+                    print(f"Retrying search request {retry_count}/{max_retries} after {wait_time} seconds")
+                    time.sleep(wait_time)
+                    continue
+                    
+                # Extract PMC IDs
+                data = response.json()
+                return data["esearchresult"]["idlist"]
+                
+            except requests.exceptions.Timeout:
+                retry_count += 1
+                wait_time = 2 ** retry_count
+                print(f"Timeout when searching articles. Retry {retry_count}/{max_retries} after {wait_time} seconds")
+                time.sleep(wait_time)
+                
+            except requests.exceptions.RequestException as e:
+                print(f"Error when searching articles: {str(e)}")
+                return []
+                
+        # If we get here, we've exhausted all retries
+        print(f"Failed to search articles after {max_retries} retries")
+        return []
     
     def fetch_article(self, pmc_id):
         """
-        Fetch full article XML from PMC.
+        Fetch full article XML from PMC with improved error handling.
         
         Args:
             pmc_id: PMC ID of the article
@@ -139,14 +185,33 @@ class PMCImageTextExtractor:
         if self.api_key:
             params["api_key"] = self.api_key
             
-        # Make the request
-        response = requests.get(base_url, params=params)
+        # Maximum number of retries
+        max_retries = 3
+        retry_count = 0
         
-        if response.status_code != 200:
-            print(f"Error fetching article {pmc_id}: {response.status_code}")
-            return None
-            
-        return response.text
+        while retry_count < max_retries:
+            try:
+                # Make the request with explicit timeout
+                response = requests.get(base_url, params=params, timeout=30)  # 30 second timeout
+                
+                if response.status_code != 200:
+                    print(f"Error fetching article {pmc_id}: {response.status_code}")
+                    return None
+                    
+                return response.text
+                
+            except requests.exceptions.Timeout:
+                retry_count += 1
+                wait_time = 2 ** retry_count  # Exponential backoff
+                print(f"Timeout fetching article {pmc_id}. Retry {retry_count}/{max_retries} after {wait_time} seconds")
+                time.sleep(wait_time)
+                
+            except requests.exceptions.RequestException as e:
+                print(f"Error fetching article {pmc_id}: {str(e)}")
+                return None
+        
+        print(f"Failed to fetch article {pmc_id} after {max_retries} retries")
+        return None
     
     def extract_figure_data(self, xml_string, pmc_id):
         """
@@ -214,7 +279,7 @@ class PMCImageTextExtractor:
     
     def download_figure_image(self, figure_data, pmc_id):
         """
-        Download the figure image and save it.
+        Download the figure image and save it with improved error handling.
         """
         try:
             # Get the image reference from the XML
@@ -232,9 +297,27 @@ class PMCImageTextExtractor:
                 'Cache-Control': 'max-age=0'
             }
             
-            # Access the HTML page of the article
+            # Access the HTML page of the article with timeout and retry
             article_url = f"https://www.ncbi.nlm.nih.gov/pmc/articles/PMC{pmc_id}/"
-            response = requests.get(article_url, headers=headers)
+            
+            max_retries = 3
+            retry_count = 0
+            
+            while retry_count < max_retries:
+                try:
+                    response = requests.get(article_url, headers=headers, timeout=30)
+                    break
+                except requests.exceptions.Timeout:
+                    retry_count += 1
+                    wait_time = 2 ** retry_count
+                    print(f"Timeout accessing article page {article_url}. Retry {retry_count}/{max_retries} after {wait_time} seconds")
+                    time.sleep(wait_time)
+                    if retry_count >= max_retries:
+                        print(f"Failed to access article page after {max_retries} retries")
+                        return None
+                except requests.exceptions.RequestException as e:
+                    print(f"Error accessing article page {article_url}: {str(e)}")
+                    return None
             
             if response.status_code != 200:
                 print(f"Error accessing article page {article_url}: {response.status_code}")
@@ -260,8 +343,23 @@ class PMCImageTextExtractor:
             if image_url.startswith('/'):
                 image_url = f"https://www.ncbi.nlm.nih.gov{image_url}"
             
-            # Download the image with the same headers
-            response = requests.get(image_url, headers=headers)
+            # Download the image with the same headers and retry logic
+            retry_count = 0
+            while retry_count < max_retries:
+                try:
+                    response = requests.get(image_url, headers=headers, timeout=30)
+                    break
+                except requests.exceptions.Timeout:
+                    retry_count += 1
+                    wait_time = 2 ** retry_count
+                    print(f"Timeout downloading image {image_url}. Retry {retry_count}/{max_retries} after {wait_time} seconds")
+                    time.sleep(wait_time)
+                    if retry_count >= max_retries:
+                        print(f"Failed to download image after {max_retries} retries")
+                        return None
+                except requests.exceptions.RequestException as e:
+                    print(f"Error downloading image {image_url}: {str(e)}")
+                    return None
             
             if response.status_code != 200:
                 print(f"Error downloading image {image_url}: {response.status_code}")
@@ -368,14 +466,102 @@ if __name__ == "__main__":
     # Initialize the extractor
     extractor = PMCImageTextExtractor(
         output_dir="pmc_glaucoma",
-        email="anabil@charlotte.edu",  # Replace with your email
-        api_key=""
+        email="anabil@charlotte.edu",  # Your email
+        api_key="c723f4433947bd8c33ac66bcb5e5c58c4608"  # Add your complete API key here
     )
     
-    # Create the dataset
-    # Set limit_articles=False to process all available articles
+    # Create the dataset with more cautious rate limiting
     extractor.create_dataset(
         query="glaucoma",  # Your topic of interest
-        limit_articles=False,  # Set to False to process all available articles
-        max_articles=100  # Only used if limit_articles is True
+        limit_articles=False,  # Set to True initially to test with a small set
+        max_articles=5       # Start with a small number to test
     )
+    
+    # Modify process_article to use longer sleep times between requests
+    '''
+    def process_article(self, pmc_id):
+        """
+        Process a single article to extract all figure-caption pairs.
+        
+        Args:
+            pmc_id: PMC ID of the article
+            
+        Returns:
+            Number of figure-caption pairs extracted
+        """
+        # Fetch article XML
+        xml_string = self.fetch_article(pmc_id)
+        if not xml_string:
+            return 0
+            
+        # Extract figures and captions
+        figures = self.extract_figure_data(xml_string, pmc_id)
+        
+        # Download and save images
+        pairs_count = 0
+        for figure in figures:
+            # Respect rate limits - use longer sleep time
+            time.sleep(1.5)  # Increased from 0.5 to 1.5 seconds
+            
+            # Download image
+            processed_figure = self.download_figure_image(figure, pmc_id)
+            if processed_figure:
+                # Add to metadata
+                pair_data = {
+                    "image_path": os.path.basename(processed_figure["local_image_path"]),
+                    "caption": processed_figure["caption"],
+                    "pmc_id": pmc_id,
+                    "figure_id": processed_figure["figure_id"]
+                }
+                self.metadata["pairs"].append(pair_data)
+                pairs_count += 1
+                
+        return pairs_count
+    '''
+    
+    # Modify create_dataset to use fewer concurrent threads and longer sleep times
+    '''
+    def create_dataset(self, query, limit_articles=True, max_articles=10):
+        """
+        Create a dataset of figure-caption pairs from PMC articles.
+        
+        Args:
+            query: Search query for relevant articles
+            limit_articles: Whether to limit the number of articles to process
+            max_articles: Maximum number of articles to process if limit_articles is True
+            
+        Returns:
+            Path to the dataset directory
+        """
+        print(f"Searching for articles with query: '{query}'")
+        pmc_ids = self.search_articles(query, limit_results=limit_articles, max_results=max_articles)
+        
+        if not pmc_ids:
+            print("No articles found.")
+            return self.output_dir
+            
+        print(f"Will process {len(pmc_ids)} articles. Starting processing...")
+        
+        total_pairs = 0
+        # Reduced max_workers from 5 to 3 to avoid overwhelming the server
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            for i, pmc_id in enumerate(pmc_ids):
+                print(f"Processing article {i+1}/{len(pmc_ids)}: PMC{pmc_id}")
+                pairs = self.process_article(pmc_id)
+                total_pairs += pairs
+                print(f"  Extracted {pairs} figure-caption pairs")
+                
+                # Save metadata periodically
+                if i % 5 == 0 or i == len(pmc_ids) - 1:
+                    with open(self.metadata_file, 'w') as f:
+                        json.dump(self.metadata, f, indent=2)
+                        
+                # Respect rate limits - use longer sleep time
+                time.sleep(2)  # Increased from 1 to 2 seconds
+        
+        print(f"Dataset creation complete. Total pairs: {total_pairs}")
+        print(f"Dataset saved to: {self.output_dir}")
+        print(f"Metadata file: {self.metadata_file}")
+        
+        return self.output_dir
+    '''
